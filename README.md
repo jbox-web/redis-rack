@@ -1,8 +1,6 @@
 # Redis session store for Rack
 
-[![Gem Version](https://badge.fury.io/rb/redis-rack.png)](http://badge.fury.io/rb/redis-rack)
 [![Build Status](https://github.com/redis-store/redis-rack/workflows/CI/badge.svg)](https://github.com/redis-store/redis-rack/actions)
-[![Code Climate](https://codeclimate.com/github/redis-store/redis-store.png)](https://codeclimate.com/github/redis-store/redis-rack)
 
 __`redis-rack`__ provides a Redis-backed session store for __Rack__.
 
