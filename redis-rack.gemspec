@@ -12,7 +12,7 @@ Gem::Specification.new do |s|
   s.description = 'Redis Store for Rack applications'
   s.license     = 'MIT'
 
-  s.required_ruby_version = '>= 2.7.0'
+  s.required_ruby_version = '>= 3.1.0'
 
   s.files = Dir['README.md', 'MIT-LICENSE', 'CHANGELOG.md', 'lib/**/*.rb']
 
