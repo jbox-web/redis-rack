@@ -1,8 +1,8 @@
 ---
 plugins:
-  - rubocop-minitest
   - rubocop-performance
   - rubocop-rake
+  - rubocop-rspec
 
 AllCops:
   NewCops: enable
@@ -22,3 +22,11 @@ Metrics/MethodLength:
 Naming/FileName:
   Exclude:
     - lib/redis-rack.rb
+
+# The specs are end-to-end session scenarios: several requests and
+# expectations per example are intended.
+RSpec/ExampleLength:
+  Enabled: false
+
+RSpec/MultipleExpectations:
+  Enabled: false

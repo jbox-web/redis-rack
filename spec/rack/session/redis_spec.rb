@@ -1,56 +1,55 @@
 # frozen_string_literal: true
 
-require 'test_helper'
+require 'spec_helper'
 require 'rack/mock'
 require 'connection_pool'
 
-describe Rack::Session::Redis do # rubocop:disable Metrics/BlockLength
-  session_key = Rack::Session::Redis::DEFAULT_OPTIONS[:key]
-  session_match = /#{session_key}=([0-9a-fA-F]+);/
-  incrementor = lambda do |env|
-    env['rack.session']['counter'] ||= 0
-    env['rack.session']['counter'] += 1
-    Rack::Response.new(env['rack.session'].inspect).to_a
-  end
-  drop_session = proc do |env|
-    env['rack.session.options'][:drop] = true
-    incrementor.call(env)
-  end
-  renew_session = proc do |env|
-    env['rack.session.options'][:renew] = true
-    incrementor.call(env)
-  end
-  defer_session = proc do |env|
-    env['rack.session.options'][:defer] = true
-    incrementor.call(env)
-  end
-  skip_session = proc do |env|
-    env['rack.session.options'][:skip] = true
-    incrementor.call(env)
-  end
-
-  let(:counter1) do
-    if RUBY_VERSION >= '3.4'
-      '{"counter" => 1}'
-    else
-      '{"counter"=>1}'
+RSpec.describe Rack::Session::Redis do
+  let(:session_key) { described_class::DEFAULT_OPTIONS[:key] }
+  let(:session_match) { /#{session_key}=([0-9a-fA-F]+);/ }
+  let(:incrementor) do
+    lambda do |env|
+      env['rack.session']['counter'] ||= 0
+      env['rack.session']['counter'] += 1
+      Rack::Response.new(env['rack.session'].inspect).to_a
     end
   end
 
-  let(:counter2) do
-    if RUBY_VERSION >= '3.4'
-      '{"counter" => 2}'
-    else
-      '{"counter"=>2}'
+  def app_with_session_option(option)
+    proc do |env|
+      env['rack.session.options'][option] = true
+      incrementor.call(env)
     end
   end
 
-  let(:counter3) do
+  def inspected_counter(value)
     if RUBY_VERSION >= '3.4'
-      '{"counter" => 3}'
+      %({"counter" => #{value}})
     else
-      '{"counter"=>3}'
+      %({"counter"=>#{value}})
     end
+  end
+
+  def with_pool_management(*args)
+    yield simple(*args)
+    yield pooled(*args)
+    yield external_pooled(*args)
+  end
+
+  def simple(app, options = {})
+    described_class.new(app, options)
+  end
+
+  def pooled(app, options = {})
+    described_class.new(app, options)
+    described_class.new(app, options.merge(pool_size: 5, pool_timeout: 10))
+  end
+
+  def external_pooled(app, options = {})
+    pool = ConnectionPool.new(size: 1, timeout: 1) do
+      Redis::Store::Factory.create('redis://127.0.0.1:6380/1')
+    end
+    described_class.new(app, options.merge(pool: pool))
   end
 
   # # test Redis connection
@@ -63,109 +62,106 @@ describe Rack::Session::Redis do # rubocop:disable Metrics/BlockLength
   # end
 
   it "can create it's own pool" do
-    session_store = Rack::Session::Redis.new(incrementor, pool_size: 5, pool_timeout: 10)
+    session_store = described_class.new(incrementor, pool_size: 5, pool_timeout: 10)
     conn = session_store.instance_variable_get(:@conn)
 
-    _(conn.pool.class).must_equal ConnectionPool
-    _(conn.pool.instance_variable_get(:@size)).must_equal 5
+    expect(conn.pool).to be_instance_of(ConnectionPool)
+    expect(conn.pool.instance_variable_get(:@size)).to eq(5)
   end
 
   it "can create it's own pool using default Redis server" do
-    session_store = Rack::Session::Redis.new(incrementor, pool_size: 5, pool_timeout: 10)
+    session_store = described_class.new(incrementor, pool_size: 5, pool_timeout: 10)
 
-    session_store.with do |connection|
-      _(connection.to_s).must_match(/127\.0\.0\.1:6379 against DB 0 with namespace rack:session$/)
-    end
+    expect(session_store.with(&:to_s)).to match(/127\.0\.0\.1:6379 against DB 0 with namespace rack:session$/)
   end
 
   it "can create it's own pool using provided Redis server" do
-    session_store = Rack::Session::Redis.new(incrementor, redis_server: 'redis://127.0.0.1:6380/1', pool_size: 5,
-                                                          pool_timeout: 10)
+    session_store = described_class.new(incrementor, redis_server: 'redis://127.0.0.1:6380/1', pool_size: 5,
+                                                     pool_timeout: 10)
 
-    session_store.with { |connection| _(connection.to_s).must_match(/127\.0\.0\.1:6380 against DB 1$/) }
+    expect(session_store.with(&:to_s)).to match(/127\.0\.0\.1:6380 against DB 1$/)
   end
 
   it 'can use a supplied pool' do
-    session_store = Rack::Session::Redis.new(incrementor, pool: ConnectionPool.new(size: 1, timeout: 1) do
+    session_store = described_class.new(incrementor, pool: ConnectionPool.new(size: 1, timeout: 1) do
       Redis::Store::Factory.create('redis://127.0.0.1:6380/1')
     end)
     conn = session_store.instance_variable_get(:@conn)
 
-    _(conn.pool.class).must_equal ConnectionPool
-    _(conn.pool.instance_variable_get(:@size)).must_equal 1
+    expect(conn.pool).to be_instance_of(ConnectionPool)
+    expect(conn.pool.instance_variable_get(:@size)).to eq(1)
   end
 
   it 'uses the specified Redis store when provided' do
     store = Redis::Store::Factory.create('redis://127.0.0.1:6380/1')
-    pool = Rack::Session::Redis.new(incrementor, redis_store: store)
-    pool.with do |p|
-      _(p.to_s).must_match(/127\.0\.0\.1:6380 against DB 1$/)
-      _(p).must_equal(store)
-    end
+    pool = described_class.new(incrementor, redis_store: store)
+
+    expect(pool.with(&:to_s)).to match(/127\.0\.0\.1:6380 against DB 1$/)
+    expect(pool.with(&:itself)).to eq(store)
   end
 
   it 'uses the default Redis server and namespace when not provided' do
-    pool = Rack::Session::Redis.new(incrementor)
+    pool = described_class.new(incrementor)
 
-    pool.with { |p| _(p.to_s).must_match(/127\.0\.0\.1:6379 against DB 0 with namespace rack:session$/) }
+    expect(pool.with(&:to_s)).to match(/127\.0\.0\.1:6379 against DB 0 with namespace rack:session$/)
   end
 
   it 'uses the specified namespace when provided' do
-    pool = Rack::Session::Redis.new(incrementor, redis_server: { namespace: 'test:rack:session' })
+    pool = described_class.new(incrementor, redis_server: { namespace: 'test:rack:session' })
 
-    pool.with { |p| _(p.to_s).must_match(/namespace test:rack:session$/) }
+    expect(pool.with(&:to_s)).to match(/namespace test:rack:session$/)
   end
 
   it 'uses the specified Redis server when provided' do
-    pool = Rack::Session::Redis.new(incrementor, redis_server: 'redis://127.0.0.1:6380/1')
+    pool = described_class.new(incrementor, redis_server: 'redis://127.0.0.1:6380/1')
 
-    pool.with { |p| _(p.to_s).must_match(/127\.0\.0\.1:6380 against DB 1$/) }
+    expect(pool.with(&:to_s)).to match(/127\.0\.0\.1:6380 against DB 1$/)
   end
 
   it 'is threadsafe by default' do
-    sesion_store = Rack::Session::Redis.new(incrementor)
+    sesion_store = described_class.new(incrementor)
 
-    _(sesion_store.threadsafe?).must_equal(true)
+    expect(sesion_store.threadsafe?).to be(true)
   end
 
   it 'does not store a blank session' do
-    session_store = Rack::Session::Redis.new(incrementor)
+    session_store = described_class.new(incrementor)
     sid = session_store.generate_unique_sid({})
 
-    session_store.with { |c| _(c.get(sid.private_id)).must_be_nil }
+    expect(session_store.with { |c| c.get(sid.private_id) }).to be_nil
   end
 
   it 'locks the store mutex' do
     mutex = Mutex.new
-    mutex.expects(:lock).once
-    sesion_store = Rack::Session::Redis.new(incrementor)
+    allow(mutex).to receive(:lock)
+    sesion_store = described_class.new(incrementor)
     sesion_store.instance_variable_set(:@mutex, mutex)
     was_yielded = false
-    request = Minitest::Mock.new
-    request.expect(:multithread?, true)
+    request = instance_double(Rack::Request)
     sesion_store.with_lock(request) { was_yielded = true }
 
-    _(was_yielded).must_equal(true)
+    expect(mutex).to have_received(:lock).once
+    expect(was_yielded).to be(true)
   end
 
   describe 'threadsafe disabled' do
     it 'can have the global lock disabled' do
-      sesion_store = Rack::Session::Redis.new(incrementor, threadsafe: false)
+      sesion_store = described_class.new(incrementor, threadsafe: false)
 
-      _(sesion_store.threadsafe?).must_equal(false)
+      expect(sesion_store.threadsafe?).to be(false)
     end
 
     it 'does not lock the store mutex' do
       mutex = Mutex.new
-      mutex.expects(:lock).never
-      sesion_store = Rack::Session::Redis.new(incrementor, threadsafe: false)
+      allow(mutex).to receive(:lock)
+      sesion_store = described_class.new(incrementor, threadsafe: false)
       sesion_store.instance_variable_set(:@mutex, mutex)
       was_yielded = false
-      request = Minitest::Mock.new
-      request.expect(:multithread?, true)
+      request = instance_double(Rack::Request)
       sesion_store.with_lock(request) { was_yielded = true }
 
-      _(was_yielded).must_equal(true)
+      expect(mutex).not_to have_received(:lock)
+      expect(was_yielded).to be(true)
     end
   end
 
@@ -173,8 +169,8 @@ describe Rack::Session::Redis do # rubocop:disable Metrics/BlockLength
     with_pool_management(incrementor) do |pool|
       res = Rack::MockRequest.new(pool).get('/')
 
-      _(res['Set-Cookie']).must_include("#{session_key}=")
-      _(res.body).must_equal(counter1)
+      expect(res['Set-Cookie']).to include("#{session_key}=")
+      expect(res.body).to eq(inspected_counter(1))
     end
   end
 
@@ -184,10 +180,8 @@ describe Rack::Session::Redis do # rubocop:disable Metrics/BlockLength
       res = req.get('/')
       cookie = res['Set-Cookie']
 
-      _(req.get('/', 'HTTP_COOKIE' => cookie)
-         .body).must_equal(counter2)
-      _(req.get('/', 'HTTP_COOKIE' => cookie)
-         .body).must_equal(counter3)
+      expect(req.get('/', 'HTTP_COOKIE' => cookie).body).to eq(inspected_counter(2))
+      expect(req.get('/', 'HTTP_COOKIE' => cookie).body).to eq(inspected_counter(3))
     end
   end
 
@@ -197,10 +191,8 @@ describe Rack::Session::Redis do # rubocop:disable Metrics/BlockLength
       res = req.get('/')
       sid = res['Set-Cookie'][session_match, 1]
 
-      _(req.get("/?rack.session=#{sid}")
-         .body).must_equal(counter1)
-      _(req.get("/?rack.session=#{sid}")
-         .body).must_equal(counter1)
+      expect(req.get("/?rack.session=#{sid}").body).to eq(inspected_counter(1))
+      expect(req.get("/?rack.session=#{sid}").body).to eq(inspected_counter(1))
     end
   end
 
@@ -210,10 +202,8 @@ describe Rack::Session::Redis do # rubocop:disable Metrics/BlockLength
       res = req.get('/')
       sid = res['Set-Cookie'][session_match, 1]
 
-      _(req.get("/?rack.session=#{sid}")
-         .body).must_equal(counter2)
-      _(req.get("/?rack.session=#{sid}")
-         .body).must_equal(counter3)
+      expect(req.get("/?rack.session=#{sid}").body).to eq(inspected_counter(2))
+      expect(req.get("/?rack.session=#{sid}").body).to eq(inspected_counter(3))
     end
   end
 
@@ -223,10 +213,10 @@ describe Rack::Session::Redis do # rubocop:disable Metrics/BlockLength
       res = Rack::MockRequest.new(pool)
                              .get('/', 'HTTP_COOKIE' => bad_cookie)
 
-      _(res.body).must_equal(counter1)
+      expect(res.body).to eq(inspected_counter(1))
       cookie = res['Set-Cookie'][session_match]
 
-      _(cookie).wont_match(/#{bad_cookie}/)
+      expect(cookie).not_to match(/#{bad_cookie}/)
     end
   end
 
@@ -234,19 +224,19 @@ describe Rack::Session::Redis do # rubocop:disable Metrics/BlockLength
     with_pool_management(incrementor, expire_after: 3) do |pool|
       res = Rack::MockRequest.new(pool).get('/')
 
-      _(res.body).must_include(counter1)
+      expect(res.body).to include(inspected_counter(1))
       cookie = res['Set-Cookie']
       sid = cookie[session_match, 1]
       res = Rack::MockRequest.new(pool).get('/', 'HTTP_COOKIE' => cookie)
 
-      _(res['Set-Cookie'][session_match, 1]).must_equal(sid)
-      _(res.body).must_include(counter2)
-      puts 'Sleeping to expire session' if $DEBUG
+      expect(res['Set-Cookie'][session_match, 1]).to eq(sid)
+      expect(res.body).to include(inspected_counter(2))
+      warn 'Sleeping to expire session' if $DEBUG
       sleep 4
       res = Rack::MockRequest.new(pool).get('/', 'HTTP_COOKIE' => cookie)
 
-      _(res['Set-Cookie'][session_match, 1]).wont_equal(sid)
-      _(res.body).must_include(counter1)
+      expect(res['Set-Cookie'][session_match, 1]).not_to eq(sid)
+      expect(res.body).to include(inspected_counter(1))
     end
   end
 
@@ -257,92 +247,92 @@ describe Rack::Session::Redis do # rubocop:disable Metrics/BlockLength
       res0 = req.get('/')
       cookie = res0['Set-Cookie']
 
-      _(res0.body).must_equal(counter1)
+      expect(res0.body).to eq(inspected_counter(1))
 
       res1 = req.get('/', 'HTTP_COOKIE' => cookie)
 
-      _(res1['Set-Cookie']).must_be_nil
-      _(res1.body).must_equal(counter2)
+      expect(res1['Set-Cookie']).to be_nil
+      expect(res1.body).to eq(inspected_counter(2))
 
       res2 = req.get('/', 'HTTP_COOKIE' => cookie)
 
-      _(res2['Set-Cookie']).must_be_nil
-      _(res2.body).must_equal(counter3)
+      expect(res2['Set-Cookie']).to be_nil
+      expect(res2.body).to eq(inspected_counter(3))
     end
   end
 
   it 'deletes cookies with :drop option' do
     with_pool_management(incrementor) do |pool|
       req = Rack::MockRequest.new(pool)
-      drop = Rack::Utils::Context.new(pool, drop_session)
+      drop = Rack::Utils::Context.new(pool, app_with_session_option(:drop))
       dreq = Rack::MockRequest.new(drop)
 
       res1 = req.get('/')
       session = (cookie = res1['Set-Cookie'])[session_match]
 
-      _(res1.body).must_equal(counter1)
+      expect(res1.body).to eq(inspected_counter(1))
 
       res2 = dreq.get('/', 'HTTP_COOKIE' => cookie)
 
-      _(res2['Set-Cookie']).must_be_nil
-      _(res2.body).must_equal(counter2)
+      expect(res2['Set-Cookie']).to be_nil
+      expect(res2.body).to eq(inspected_counter(2))
 
       res3 = req.get('/', 'HTTP_COOKIE' => cookie)
 
-      _(res3['Set-Cookie'][session_match]).wont_equal(session)
-      _(res3.body).must_equal(counter1)
+      expect(res3['Set-Cookie'][session_match]).not_to eq(session)
+      expect(res3.body).to eq(inspected_counter(1))
     end
   end
 
   it 'provides new session id with :renew option' do
     with_pool_management(incrementor) do |pool|
       req = Rack::MockRequest.new(pool)
-      renew = Rack::Utils::Context.new(pool, renew_session)
+      renew = Rack::Utils::Context.new(pool, app_with_session_option(:renew))
       rreq = Rack::MockRequest.new(renew)
 
       res1 = req.get('/')
       session = (cookie = res1['Set-Cookie'])[session_match]
 
-      _(res1.body).must_equal(counter1)
+      expect(res1.body).to eq(inspected_counter(1))
 
       res2 = rreq.get('/', 'HTTP_COOKIE' => cookie)
       new_cookie = res2['Set-Cookie']
       new_session = new_cookie[session_match]
 
-      _(new_session).wont_equal(session)
-      _(res2.body).must_equal(counter2)
+      expect(new_session).not_to eq(session)
+      expect(res2.body).to eq(inspected_counter(2))
 
       res3 = req.get('/', 'HTTP_COOKIE' => new_cookie)
 
-      _(res3.body).must_equal(counter3)
+      expect(res3.body).to eq(inspected_counter(3))
 
       # Old cookie was deleted
       res4 = req.get('/', 'HTTP_COOKIE' => cookie)
 
-      _(res4.body).must_equal(counter1)
+      expect(res4.body).to eq(inspected_counter(1))
     end
   end
 
   it 'omits cookie with :defer option' do
     with_pool_management(incrementor) do |pool|
-      defer = Rack::Utils::Context.new(pool, defer_session)
+      defer = Rack::Utils::Context.new(pool, app_with_session_option(:defer))
       dreq = Rack::MockRequest.new(defer)
 
       res0 = dreq.get('/')
 
-      _(res0['Set-Cookie']).must_be_nil
-      _(res0.body).must_equal(counter1)
+      expect(res0['Set-Cookie']).to be_nil
+      expect(res0.body).to eq(inspected_counter(1))
     end
   end
 
   it 'does not hit with :skip option' do
     with_pool_management(incrementor) do |session_store|
-      skip = Rack::Utils::Context.new(session_store, skip_session)
+      skip = Rack::Utils::Context.new(session_store, app_with_session_option(:skip))
       sreq = Rack::MockRequest.new(skip)
 
       res0 = sreq.get('/')
 
-      _(res0.body).must_equal(counter1)
+      expect(res0.body).to eq(inspected_counter(1))
     end
   end
 
@@ -368,22 +358,20 @@ describe Rack::Session::Redis do # rubocop:disable Metrics/BlockLength
       req.get('/', 'HTTP_COOKIE' => cookie)
       ses1 = pool.with { |c| c.get(sid.private_id) }
 
-      _(ses1).wont_equal(ses0)
+      expect(ses1).not_to eq(ses0)
     end
   end
 
   # anyone know how to do this better?
-  it 'cleanly merges sessions when multithreaded' do # rubocop:disable Metrics/BlockLength
-    unless $DEBUG
-      _(1).must_equal(1) # fake assertion to appease the mighty bacon
-      next
-    end
+  it 'cleanly merges sessions when multithreaded' do
+    skip 'only runs in debug mode (ruby -d)' unless $DEBUG
+
     warn 'Running multithread test for Session::Redis'
-    with_pool_management(incrementor) do |pool| # rubocop:disable Metrics/BlockLength
+    with_pool_management(incrementor) do |pool|
       req = Rack::MockRequest.new(pool)
       res = req.get('/')
 
-      _(res.body).must_equal(counter1)
+      expect(res.body).to eq(inspected_counter(1))
 
       cookie = res['Set-Cookie']
       session_id = cookie[session_match, 1]
@@ -408,14 +396,14 @@ describe Rack::Session::Redis do # rubocop:disable Metrics/BlockLength
       end.reverse.map { |t| t.run.join.value } # rubocop:disable Style/MultilineBlockChain
 
       r.each do |request|
-        _(request['Set-Cookie']).must_equal(cookie)
-        _(request.body).must_include(counter2)
+        expect(request['Set-Cookie']).to eq(cookie)
+        expect(request.body).to include(inspected_counter(2))
       end
 
       session = pool.with { |c| c.get(sid.private_id) }
 
-      _(session.size).must_equal(tnum + 1) # counter
-      _(session['counter']).must_equal(2) # meeeh
+      expect(session.size).to eq(tnum + 1) # counter
+      expect(session['counter']).to eq(2) # meeeh
 
       tnum = rand(7).to_i + 5
       r = Array.new(tnum) do |_i|
@@ -427,14 +415,14 @@ describe Rack::Session::Redis do # rubocop:disable Metrics/BlockLength
       end.reverse.map { |t| t.run.join.value } # rubocop:disable Style/MultilineBlockChain
 
       r.each do |request|
-        _(request['Set-Cookie']).must_equal(cookie)
-        _(request.body).must_include('"counter"=>3')
+        expect(request['Set-Cookie']).to eq(cookie)
+        expect(request.body).to include('"counter"=>3')
       end
 
       session = pool.with { |c| c.get(sid.private_id) }
 
-      _(session.size).must_equal(tnum + 1)
-      _(session['counter']).must_equal(3)
+      expect(session.size).to eq(tnum + 1)
+      expect(session['counter']).to eq(3)
 
       drop_counter = proc do |env|
         env['rack.session'].delete 'counter'
@@ -453,39 +441,15 @@ describe Rack::Session::Redis do # rubocop:disable Metrics/BlockLength
       end.reverse.map { |t| t.run.join.value } # rubocop:disable Style/MultilineBlockChain
 
       r.each do |request|
-        _(request['Set-Cookie']).must_equal(cookie)
-        _(request.body).must_include('"foo"=>"bar"')
+        expect(request['Set-Cookie']).to eq(cookie)
+        expect(request.body).to include('"foo"=>"bar"')
       end
 
       session = pool.with { |c| c.get(sid.private_id) }
 
-      _(session.size).must_equal(r.size + 1)
-      _(session['counter']).must_be_nil
-      _(session['foo']).must_equal('bar')
+      expect(session.size).to eq(r.size + 1)
+      expect(session['counter']).to be_nil
+      expect(session['foo']).to eq('bar')
     end
-  end
-
-  private
-
-  def with_pool_management(*args)
-    yield simple(*args)
-    yield pooled(*args)
-    yield external_pooled(*args)
-  end
-
-  def simple(app, options = {})
-    Rack::Session::Redis.new(app, options)
-  end
-
-  def pooled(app, options = {})
-    Rack::Session::Redis.new(app, options)
-    Rack::Session::Redis.new(app, options.merge(pool_size: 5, pool_timeout: 10))
-  end
-
-  def external_pooled(app, options = {})
-    pool = ConnectionPool.new(size: 1, timeout: 1) do
-      Redis::Store::Factory.create('redis://127.0.0.1:6380/1')
-    end
-    Rack::Session::Redis.new(app, options.merge(pool: pool))
   end
 end

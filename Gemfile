@@ -5,14 +5,12 @@ source 'https://rubygems.org'
 gemspec
 
 gem 'connection_pool'
-gem 'minitest'
-gem 'minitest-mock'
-gem 'mocha'
 gem 'rake'
 gem 'redis-store-testing', github: 'redis-store/testing'
+gem 'rspec'
 
 # Dev tools / linter
 gem 'rubocop',             require: false
-gem 'rubocop-minitest',    require: false
 gem 'rubocop-performance', require: false
 gem 'rubocop-rake',        require: false
+gem 'rubocop-rspec',       require: false

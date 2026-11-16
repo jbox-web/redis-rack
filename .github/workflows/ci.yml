@@ -88,5 +88,5 @@ jobs:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
 
-      - name: Run Minitest
+      - name: Run RSpec
         run: bin/rake
