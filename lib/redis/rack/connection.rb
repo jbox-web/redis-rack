@@ -19,9 +19,9 @@ class Redis
         end
       end
 
-      def with(&block)
+      def with(&)
         if pooled?
-          pool.with(&block)
+          pool.with(&)
         else
           yield(store)
         end

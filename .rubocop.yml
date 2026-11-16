@@ -10,6 +10,12 @@ AllCops:
   Exclude:
     - bin/*
 
+Gemspec/RequireMFA:
+  Enabled: false
+
+Style/Documentation:
+  Enabled: false
+
 Metrics/MethodLength:
   Max: 12
 

@@ -38,7 +38,7 @@ module Rack
           [generate_sid, {}]
         else
           with_lock(req, [nil, {}]) do
-            unless sid and (session = get_session_with_fallback(sid))
+            unless sid && (session = get_session_with_fallback(sid))
               session = {}
               sid = generate_unique_sid(session)
             end
@@ -81,8 +81,8 @@ module Rack
         @mutex.unlock if @mutex.locked?
       end
 
-      def with(&block)
-        @conn.with(&block)
+      def with(&)
+        @conn.with(&)
       end
 
       private

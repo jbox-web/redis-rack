@@ -1,53 +1,92 @@
+---
 name: CI
+
+permissions: {}
 
 on:
   push:
-    branches-ignore: [master]
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - '**'
+  schedule:
+    - cron: '0 4 1 * *'
+  # Run workflow manually
+  workflow_dispatch:
 
 jobs:
+  rubocop:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+
+      - name: Bundler
+        run: bundle install
+
+      - name: Rubocop
+        run: bin/rubocop
+
   test:
     runs-on: ubuntu-latest
 
     services:
+      # Label used to access the service container
       redis1:
+        # Docker Hub image
         image: redis
+        ports: ['127.0.0.1:6379:6379']
+        # Set health checks to wait until redis has started
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-        ports:
-          - "127.0.0.1:6379:6379"
 
       redis2:
         image: redis
+        ports: ['127.0.0.1:6380:6379']
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-        ports:
-          - "127.0.0.1:6380:6379"
 
     strategy:
       fail-fast: false
       matrix:
         ruby:
-          - "4.0"
-          - "3.4"
-          - "3.3"
-          - "3.2"
-          - "3.1"
-          - "head"
-          - "jruby"
-          - "jruby-head"
-          - "truffleruby"
-          - "truffleruby-head"
+          - '4.0'
+          - '3.4'
+          - '3.3'
+          - '3.2'
+          - '3.1'
+          - 'head'
+          - 'jruby'
+          - 'jruby-head'
+          - 'truffleruby'
+          - 'truffleruby-head'
 
     steps:
-      - uses: actions/checkout@v6
-      - uses: ruby/setup-ruby@v1
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
-      - run: bin/rake
+
+      - name: Run Minitest
+        run: bin/rake
